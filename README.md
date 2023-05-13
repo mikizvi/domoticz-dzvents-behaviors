@@ -40,6 +40,8 @@ return behaviors.define_same_devices(domoticz, 'example set', {'switch-1', 'swit
 ```
 This would define switch-1, switch-2, and switch-3 as synonyms.  The table of synonym switches can contain 2 or more switches.
 
+The variant `same_devices_groups` also takes a list of groups as a parameter.  This lets you directly control the groups from the switches.  If you are looking at this, you may want to try `dzv_group` below that also has all-devices behavior.
+
 ## exclusive_devices: At most one device can be on at a time
 
 Multiple devices that must never be on at the same time.  Possibly 2 heaters on the same circuit: switching one on will switch the other off, preventing overloads.
@@ -91,6 +93,17 @@ return behaviors.cascade(domoticz, 'cascade-main', {'sub-1', 'sub-2'})
 ```
 
 This will trigger switching `cascade-main` on if either of `sub-1` or `sub-2` is switched on.
+
+## dzv_group: a main device controls a group of switches
+
+Use this functionality when the main switches all on or off, and all on or off cause the main to follow. This is the equivalent of a Domoticz group with an assigned main switch.  If you want more than one main switch, you can have the others track this main using "same_devices".  This could come in handy when there is a dummy switch at each end of a long corridor, and each dummy switch must switch on/off all the lights in the corridor.
+
+```
+behaviors = require('behaviors')
+return behaviors.dzv_group(domoticz, 'main', {'sub-1', 'sub-2'})
+```
+
+This will trigger switching `main` on/off when the last of `sub-1` or `sub-2` are switched on/off.  Switching `main` on or off will switch both `sub-1` or `sub-2` on/off.
 
 ## Format hint
 

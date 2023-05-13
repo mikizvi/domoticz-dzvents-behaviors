@@ -40,6 +40,52 @@
 --- Defines behaviours for devices and for sets of devices.
 local behaviors = {}
 
+local function get_peer(domoticz, peer_name, name)
+   local peer
+   local status
+   if (peer_name == name) then
+      return nil, nil
+   end
+   status, peer = pcall(domoticz.devices, peer_name)
+   if (not status or not peer) then
+      status, peer = pcall(domoticz.groups, peer_name)
+   end
+   if (not status or not peer) then
+      domoticz.log("Peer "..peer_name.." of device "..name.." does not exist",
+               domoticz.LOG_ERROR)
+   end
+   return status, peer
+end
+
+local function set_devices_to_state(domoticz, name, state, these_devices)
+   for _, peer_name in pairs(these_devices) do
+      local status, peer = get_peer(domoticz, peer_name, name)
+      if (not status or not peer) then
+         goto continue
+      end
+      if (peer.state ~= state) then
+         peer.setState(state)
+         domoticz.log(state.." for "..peer_name.." because "..name.." was changed",
+            domoticz.LOG_INFO)
+      end
+      ::continue::
+   end
+end
+
+local function do_all_devices_have_state(domoticz, name, state, these_devices)
+   for _, peer_name in pairs(these_devices) do
+      local status, peer = get_peer(domoticz, peer_name, name)
+      if (not status or not peer) then
+         goto continue
+      end
+      if (peer.state ~= state) then
+	     return false
+      end
+      ::continue::
+   end
+   return true
+end
+
 --- Multiple devices that need to be switched on and off together
 -- Use this functionality when you have multiple switches for the same device.
 -- Creator function for a Domoticz dzVent event
@@ -59,23 +105,28 @@ function behaviors.same_devices(domoticz, set_name, these_devices)
       execute = function(domoticz, device)
          local state = device.state
          local name = device.name
-         for _, peer_name in pairs(these_devices) do
-            if (peer_name == name) then
-               goto continue
-            end
-            if (not domoticz.devices(peer_name)) then
-               domoticz.log("Peer "..peer_name.." of device "..name.." does not exist",
-                  domoticz.LOG_ERROR)
-               goto continue
-            end
-            local peer = domoticz.devices(peer_name)
-            if (peer.state ~= state) then
-               peer.setState(state)
-               domoticz.log(state.." for "..peer_name.." because "..name.." was changed",
-                  domoticz.LOG_INFO)
-            end
-            ::continue::
-         end
+		 set_devices_to_state(domoticz, name, state, these_devices)
+      end
+   }
+end
+
+function behaviors.same_devices_groups(domoticz, set_name, these_devices, these_groups)
+   all_devices = {}
+   table.move(these_devices, 1, #these_devices, 1, all_devices)
+   table.move(these_groups, 1, #these_groups, #all_devices + 1, all_devices)
+   return {
+      on = {
+         devices = these_devices,
+         groups = these_groups
+      },
+      logging = {
+         level = domoticz.LOG_INFO,
+         marker = "same_dev_gr("..set_name..")"
+      },
+      execute = function(domoticz, device)
+         local state = device.state
+         local name = device.name
+		 set_devices_to_state(domoticz, name, state, all_devices)
       end
    }
 end
@@ -103,23 +154,7 @@ function behaviors.exclusive_devices(domoticz, set_name, these_devices)
             return
          end
          local name = device.name
-         for _, peer_name in pairs(these_devices) do
-            if (peer_name == name) then
-               goto continue
-            end
-            if (not domoticz.devices(peer_name)) then
-               domoticz.log("Peer "..peer_name.." of device "..name.." does not exist",
-                  domoticz.LOG_ERROR)
-               goto continue
-            end
-            local peer = domoticz.devices(peer_name)
-            if (peer.state == "On") then
-               peer.switchOff()
-               domoticz.log("Switching off "..peer_name.." because "..name.." was switched on",
-                  domoticz.LOG_INFO)
-            end
-            ::continue::
-         end
+		 set_devices_to_state(domoticz, name, "Off", these_devices)
       end
    }
 end
@@ -157,23 +192,7 @@ function behaviors.main_switches_all(domoticz, main, transition_to, these_device
             end
          end
          local name = device.name
-         for _, peer_name in pairs(these_devices) do
-            if (peer_name == name) then
-               goto continue
-            end
-            if (not domoticz.devices(peer_name)) then
-               domoticz.log("Peer "..peer_name.." of device "..name.." does not exist",
-                  domoticz.LOG_ERROR)
-               goto continue
-            end
-            local peer = domoticz.devices(peer_name)
-            if (peer.state ~= state) then
-               peer.setState(state)
-               domoticz.log(state.." for "..peer_name.." because "..name.." was changed",
-                  domoticz.LOG_INFO)
-            end
-            ::continue::
-         end
+		 set_devices_to_state(domoticz, name, state, these_devices)
       end
    }
 end
@@ -288,6 +307,52 @@ function behaviors.cascade(domoticz, main_name, these_devices)
          end
          if (main.state ~= 'On') then
             main.setState('On')
+            domoticz.log(state.." for "..main_name.." because "..name.." was changed",
+               domoticz.LOG_INFO)
+         end
+      end
+   }
+end
+
+--- A main device controls a group of switches
+-- Use this functionality when the main switches all on or off, and all on or off cause the main to follow
+-- This is the equivalent of a Domoticz group with an assigned main switch
+-- Creator function for a Domoticz dzVent event
+-- @param domoticz table: the Domoticz dzVents Lua control structure
+-- @param main string: the main switch to trigger
+-- @param these_devices list of string: any of these devices will trigger the main device
+-- @return table that defines the dzVents behavior
+function behaviors.dzv_group(domoticz, main_name, these_devices)
+   all_devices = {}
+   main_devices = { main_name }
+   table.move(these_devices, 1, #these_devices, 1, all_devices)
+   table.move(main_devices, 1, #main_devices, #all_devices + 1, all_devices)
+   return {
+      on = {
+         devices = all_devices
+      },
+      logging = {
+         level = domoticz.LOG_INFO,
+         marker = "dzv_group("..main_name..")"
+      },
+      execute = function(domoticz, device)
+         local state = device.state
+         local name = device.name
+		 if (name == main_name) then
+		    set_devices_to_state(domoticz, name, state, these_devices)
+			return
+		 end
+         if (not do_all_devices_have_state(domoticz, name, state, these_devices)) then
+            return
+         end
+         local main = domoticz.devices(main_name)
+         if (main == nil) then
+            domoticz.log("Main "..main_name.." of device "..name.." does not exist",
+               domoticz.LOG_ERROR)
+            return
+         end
+         if (main.state ~= state) then
+            main.setState(state)
             domoticz.log(state.." for "..main_name.." because "..name.." was changed",
                domoticz.LOG_INFO)
          end
